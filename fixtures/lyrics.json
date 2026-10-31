@@ -1,0 +1,13 @@
+{
+  "title": "Little Duck Says Hello",
+  "lyrics": [
+    "Little duck, little duck, quack quack quack",
+    "Waddle to the pond and waddle back",
+    "Hello, {name}, the duck says hi",
+    "Splish splash, splish splash, under the sky",
+    "Little duck, little duck, quack quack quack",
+    "Waddle to the pond and waddle back"
+  ],
+  "musicPrompt": "playful children's song, ukulele, soft hand claps, bright and gentle female vocals, 100 bpm",
+  "imagePrompt": "A small yellow duckling waddling beside a round blue pond with lily pads"
+}
