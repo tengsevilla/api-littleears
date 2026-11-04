@@ -43,6 +43,18 @@ export interface TtsProvider {
   speak(input: { text: string }): Promise<Buffer>; // MP3
 }
 
+/** Offline soundscape generator only (never used by routes or the worker). */
+export interface SoundEffectsProvider {
+  generate(input: { text: string; durationSec: number; loop: boolean }): Promise<Buffer>; // MP3
+}
+
+export type DialogueLine = { text: string; voiceId: string };
+
+/** Offline story generator only (never used by routes or the worker). */
+export interface DialogueProvider {
+  generate(input: { lines: DialogueLine[] }): Promise<Buffer>; // MP3
+}
+
 export type Providers = {
   lyrics: LyricsProvider;
   music: MusicProvider;

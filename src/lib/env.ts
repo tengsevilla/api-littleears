@@ -41,6 +41,10 @@ const EnvSchema = z
     ELEVENLABS_MUSIC_MODEL: opt(z.string()),
     ELEVENLABS_TTS_MODEL: opt(z.string()),
     ELEVENLABS_TTS_VOICE_ID: opt(z.string()),
+    // Offline soundscape generator only (npm run sounds:generate) — never required.
+    ELEVENLABS_SFX_MODEL: req(z.string().default("eleven_text_to_sound_v2")),
+    // Offline story generator only (npm run stories:generate) — never required.
+    ELEVENLABS_DIALOGUE_MODEL: req(z.string().default("eleven_v3")),
 
     IMAGE_PROVIDER: req(z.enum(["gemini", "mock"])),
     GEMINI_API_KEY: opt(z.string()),

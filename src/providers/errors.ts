@@ -38,6 +38,9 @@ export class ProviderError extends AppError {
 const NETWORK_CODES = /^(ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR_\w+)$/;
 const QUOTA_TEXT = /quota|billing|insufficient|credit|payment|RESOURCE_EXHAUSTED/i;
 const POLICY_TEXT = /policy|safety|moderat|content_filter|bad_prompt|bad_composition_plan|blocked/i;
+// The account's plan does not allow this request (e.g. ElevenLabs 403 output_format_not_allowed):
+// the request itself must change, so it is a rejection, not an outage.
+const PLAN_TEXT = /subscription_required|output_format_not_allowed/i;
 
 function field(obj: unknown, key: string): unknown {
   return typeof obj === "object" && obj !== null ? (obj as Record<string, unknown>)[key] : undefined;
@@ -93,7 +96,7 @@ export function toProviderError(vendor: Vendor, err: unknown): ProviderError {
   if (status === 408 || status >= 500) return make("PROVIDER_UNAVAILABLE", true);
   // Bad API key / permissions: the provider is unusable until config is fixed.
   if (status === 401 || status === 403) {
-    return POLICY_TEXT.test(text) ? make("PROVIDER_REJECTED", false) : make("PROVIDER_UNAVAILABLE", false);
+    return POLICY_TEXT.test(text) || PLAN_TEXT.test(text) ? make("PROVIDER_REJECTED", false) : make("PROVIDER_UNAVAILABLE", false);
   }
   // Remaining 4xx: validation or content-policy rejection.
   return make("PROVIDER_REJECTED", false);
@@ -113,4 +116,30 @@ export async function readAll(stream: ReadableStream<Uint8Array> | AsyncIterable
   const chunks: Uint8Array[] = [];
   for await (const chunk of stream as AsyncIterable<Uint8Array>) chunks.push(chunk);
   return Buffer.concat(chunks);
+}
+
+/**
+ * Error text for the FAILED line: our message plus, for a ProviderError, the vendor's own status and
+ * error detail from the response body (offline generator scripts only — never
+ * log this from the API/worker, where vendor text can echo prompts with a child's name, R4). Only
+ * statusCode and body.detail fields are read — never request headers or the API key.
+ */
+export function failureText(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  if (!(err instanceof ProviderError) || typeof cause !== "object" || cause === null) return err.message;
+  const c = cause as { statusCode?: unknown; status?: unknown; body?: unknown; message?: unknown };
+  const detail = typeof c.body === "object" && c.body !== null ? (c.body as { detail?: unknown }).detail : undefined;
+  const parts: string[] = [];
+  const status = c.statusCode ?? c.status;
+  if (typeof status === "number") parts.push(`HTTP ${status}`);
+  if (typeof detail === "object" && detail !== null && !Array.isArray(detail)) {
+    const d = detail as Record<string, unknown>;
+    for (const k of ["code", "status", "message"]) if (typeof d[k] === "string") parts.push(`${k}=${d[k] as string}`);
+  } else if (detail !== undefined) {
+    parts.push(JSON.stringify(detail).slice(0, 500));
+  } else if (typeof c.message === "string") {
+    parts.push(c.message.slice(0, 500));
+  }
+  return parts.length ? `${err.message} (${parts.join(", ")})` : err.message;
 }
