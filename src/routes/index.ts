@@ -7,6 +7,8 @@ import libraryRoutes from "./library.routes.js";
 import mediaRoutes from "./media.routes.js";
 import catalogRoutes from "./catalog.routes.js";
 import invitesRoutes from "./invites.routes.js";
+import playsRoutes from "./plays.routes.js";
+import adminRoutes from "./admin.routes.js";
 
 const router = Router();
 
@@ -18,5 +20,7 @@ router.use("/library", libraryRoutes);
 router.use("/media", mediaRoutes);
 router.use("/catalog", catalogRoutes);
 router.use("/invites", invitesRoutes);
+router.use("/plays", playsRoutes);
+router.use("/admin", adminRoutes);
 
 export default router;

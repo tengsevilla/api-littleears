@@ -34,3 +34,9 @@ export const songGenerationLimiter = limiter(10, {
   skipFailedRequests: true,
   keyGenerator: (req) => (req.user ? `user:${req.user.id}` : ipKeyGenerator(req.ip ?? "")),
 });
+
+// Per authenticated user (mount after requireAuth), per hour: play events for admin stats.
+export const playLimiter = limiter(300, {
+  windowMs: 60 * 60 * 1000,
+  keyGenerator: (req) => (req.user ? `user:${req.user.id}` : ipKeyGenerator(req.ip ?? "")),
+});

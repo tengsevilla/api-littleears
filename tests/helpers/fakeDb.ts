@@ -10,6 +10,7 @@ export type FakeState = {
   jobs: Row[];
   invites: Row[];
   library_items: Row[];
+  play_events: Row[];
 };
 
 const norm = (sql: string) => sql.replace(/\s+/g, " ").trim();
@@ -17,7 +18,7 @@ const result = (rows: Row[]) => [rows, []] as const;
 const header = (affectedRows: number) => [{ affectedRows }, []] as const;
 
 export function createFakeDb() {
-  const state: FakeState = { users: [], refresh_tokens: [], children: [], songs: [], jobs: [], invites: [], library_items: [] };
+  const state: FakeState = { users: [], refresh_tokens: [], children: [], songs: [], jobs: [], invites: [], library_items: [], play_events: [] };
   let clock = Date.UTC(2026, 0, 1);
   const now = () => new Date((clock += 1000)); // strictly increasing created_at
 
@@ -115,6 +116,84 @@ export function createFakeDb() {
       return result([...own, ...items].sort(comparator("approved_at DESC, id DESC")).map((x) => ({ ...x })));
     }
 
+    // play_events + admin stats (plays.model.ts)
+    if (sql === "INSERT INTO play_events (user_id, song_id, sound_slug, played_at) VALUES (?, ?, ?, ?)") {
+      const [user_id, song_id, sound_slug, played_at] = p;
+      if (song_id !== null && !state.songs.some((x) => x.id === song_id)) throw new Error("fakeDb: FK play_events.song_id");
+      state.play_events.push({ id: state.play_events.length + 1, user_id, song_id, sound_slug, played_at, created_at: now() });
+      return header(1);
+    }
+    if (sql.includes("FROM play_events") && sql.includes("played_at >= ?")) {
+      const isTop = sql.startsWith("SELECT s.id, s.title, s.status, s.image_key");
+      const from = time(p[isTop ? 1 : 0]) as number;
+      const inRange = state.play_events.filter((pe) => (time(pe.played_at) as number) >= from);
+      const songOf = (id: unknown) => state.songs.find((x) => x.id === id);
+      const distinctUsers = (rows: Row[]) => new Set(rows.map((r) => r.user_id)).size;
+      const groupBy = (rows: Row[], key: (r: Row) => string) => {
+        const m = new Map<string, Row[]>();
+        for (const r of rows) m.set(key(r), [...(m.get(key(r)) ?? []), r]);
+        return m;
+      };
+      const songPlays = (rows: Row[]) => rows.filter((r) => r.song_id !== null).length;
+      const soundPlays = (rows: Row[]) => rows.filter((r) => r.sound_slug !== null).length;
+      if (sql.startsWith("SELECT COUNT(*) AS plays, COUNT(song_id)")) {
+        const times = inRange.map((pe) => time(pe.played_at) as number);
+        return result([
+          {
+            plays: inRange.length,
+            song_plays: songPlays(inRange),
+            sound_plays: soundPlays(inRange),
+            active_families: distinctUsers(inRange),
+            first_played: times.length ? new Date(Math.min(...times)) : null,
+          },
+        ]);
+      }
+      if (sql.startsWith("SELECT DATE_FORMAT(played_at")) {
+        const days = groupBy(inRange, (pe) => (pe.played_at as Date).toISOString().slice(0, 10));
+        return result([...days].map(([day, rows]) => ({ day, song_plays: songPlays(rows), sound_plays: soundPlays(rows) })));
+      }
+      if (isTop) {
+        const [adminId, , ownerId] = p;
+        const bySong = groupBy(inRange.filter((pe) => pe.song_id !== null), (pe) => String(pe.song_id));
+        const rows = [...bySong]
+          .map(([id, plays]) => ({ x: songOf(id), plays }))
+          .filter((r): r is { x: Row; plays: Row[] } => !!r.x && (shared(r.x) || r.x.user_id === ownerId))
+          .map(({ x, plays }): Row & { plays: number } => ({
+            ...x,
+            mine: x.user_id === adminId && (x.owner_deleted_at ?? null) === null ? 1 : 0,
+            plays: plays.length,
+            families: distinctUsers(plays),
+            library_adds: state.library_items.filter((li) => li.song_id === x.id).length,
+          }))
+          .sort((a, b) => b.plays - a.plays || String(a.title ?? "").localeCompare(String(b.title ?? "")) || String(a.id).localeCompare(String(b.id)));
+        return result(rows.slice(0, 20));
+      }
+      if (sql.startsWith("SELECT COUNT(*) AS plays FROM play_events pe JOIN songs s")) {
+        const adminId = p[1];
+        const personal = inRange.filter((pe) => {
+          const x = songOf(pe.song_id);
+          return !!x && (x.child_id ?? null) !== null && x.user_id !== adminId;
+        });
+        return result([{ plays: personal.length }]);
+      }
+      if (sql.startsWith("SELECT sound_slug AS slug")) {
+        const bySound = groupBy(inRange.filter((pe) => pe.sound_slug !== null), (pe) => String(pe.sound_slug));
+        return result(
+          [...bySound].map(([slug, rows]) => ({ slug, plays: rows.length, families: distinctUsers(rows) })).sort((a, b) => b.plays - a.plays || a.slug.localeCompare(b.slug)),
+        );
+      }
+    }
+    if (sql.startsWith("SELECT (SELECT COUNT(*) FROM users) AS families")) {
+      const from = time(p[0]) as number;
+      return result([
+        {
+          families: state.users.length,
+          songs_created: state.songs.filter((x) => (time(x.created_at) as number) >= from && (x.owner_deleted_at ?? null) === null).length,
+          shared_songs: state.songs.filter(shared).length,
+        },
+      ]);
+    }
+
     // refresh_tokens
     if (sql.startsWith("INSERT INTO refresh_tokens")) {
       const [id, user_id, family_id, token_hash, expires_at] = p;
@@ -189,7 +268,7 @@ export function createFakeDb() {
       state.jobs.push({ id, song_id, step, regen_part, attempts: 0, safety_regens: 0, run_after: now(), locked_at: null, done_at: null, last_error: null });
       return header(1);
     }
-    const sel = /^SELECT (.+?) FROM (songs|jobs|children|invites)(?: WHERE (.+?))?(?: ORDER BY (.+?))?(?: LIMIT (\d+))?(?: FOR UPDATE(?: SKIP LOCKED)?)?$/.exec(sql);
+    const sel = /^SELECT (.+?) FROM (songs|jobs|children|invites|play_events)(?: WHERE (.+?))?(?: ORDER BY (.+?))?(?: LIMIT (\d+))?(?: FOR UPDATE(?: SKIP LOCKED)?)?$/.exec(sql);
     if (sel) {
       const [, , table, where, orderBy, limit] = sel;
       const args = [...p];
@@ -228,6 +307,7 @@ export function createFakeDb() {
     state.songs = state.songs.filter((s) => !gone.has(s.id));
     state.jobs = state.jobs.filter((j) => !gone.has(j.song_id));
     state.library_items = state.library_items.filter((li) => !gone.has(li.song_id));
+    state.play_events = state.play_events.filter((pe) => !gone.has(pe.song_id));
     return gone.size;
   }
 
@@ -334,6 +414,7 @@ export function createFakeDb() {
       state.jobs = [];
       state.invites = [];
       state.library_items = [];
+      state.play_events = [];
     },
   };
 }
